@@ -1,0 +1,19 @@
+[package]
+name = "jencrypt"
+version = "0.1.0"
+authors = ["Jesse Badry <jessebadry@gmail.com>"]
+
+[dependencies]
+libc = "0.2.71"
+scrypt = "0.3.1"
+
+ofb = "0.2.0"
+aes = "0.4.0"
+stream-cipher = "0.6.0"
+rand = "0.7.3"
+clap = "2.33.0"
+readonly = "0.1.6"
+jb_utils = {git="https://github.com/jessebadry/Jesse-s-Utils.git"}
+[lib]
+name = "jencrypt"
+crate-type = ["rlib","dylib"]
