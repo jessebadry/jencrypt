@@ -9,12 +9,12 @@ use ofb::Ofb;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+
 type AesOfb = Ofb<Aes128>;
 
 static JFILE_HEADER_SIZE: u64 = 32;
 
-fn is_file(file_name: &str) -> io::Result<()> {
+fn is_file(file_name: &str) -> bool {
     std::fs::metadata(file_name)
         .map_err(|_| {
             Error::new(
@@ -31,13 +31,13 @@ fn is_file(file_name: &str) -> io::Result<()> {
             } else {
                 Ok(())
             }
-        })?;
-    Ok(())
+        })
+        .is_ok()
 }
 
 fn file(filename: &str, reading: bool) -> io::Result<File> {
-    if reading {
-        is_file(filename)?;
+    if reading && !is_file(filename) {
+        return Err(io_err!(format!("The file '{}' does not exist!", filename)));
     }
     let writing = !reading;
     let file = OpenOptions::new()
@@ -95,8 +95,8 @@ impl JFile {
         })
     }
 
-    pub fn is_decrypting(&mut self, is_decrypting:bool) -> io::Result<&mut Self> {
-        if is_decrypting{
+    pub fn is_decrypting(&mut self, is_decrypting: bool) -> io::Result<&mut Self> {
+        if is_decrypting {
             println!("seeking to {}", JFILE_HEADER_SIZE);
             seek_to(&mut self.file, JFILE_HEADER_SIZE)?;
         }

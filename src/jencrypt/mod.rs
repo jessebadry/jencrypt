@@ -61,7 +61,12 @@ pub fn encrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
     let pack = create_encryption_package(pswd, None, None)?;
     cipher_file(&pack, fname, true)
 }
-
+pub fn encrypt_file_p(encryption_pack: &EncryptionPackage, fname: &str) -> io::Result<()> {
+    cipher_file(encryption_pack, fname, true)
+}
+pub fn decrypt_file_p(encryption_pack: &EncryptionPackage, fname: &str) -> io::Result<()> {
+    cipher_file(encryption_pack, fname, false)
+}
 fn cipher_file(pack: &EncryptionPackage, fname: &str, encrypting: bool) -> io::Result<()> {
     let temp_name = format!("{}.temp", fname);
     let temp_name = temp_name.as_str();
