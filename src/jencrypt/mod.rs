@@ -41,6 +41,7 @@ pub fn create_encryption_package(
     salt: Option<Vec<u8>>,
     iv: Option<Vec<u8>>,
 ) -> io::Result<EncryptionPackage> {
+
     if salt.as_ref().map(|salt| salt.len() != 16).unwrap_or(false)
         || iv.as_ref().map(|iv| iv.len() != 16).unwrap_or(false)
     {
@@ -54,6 +55,7 @@ pub fn create_encryption_package(
     let params = Params::new(14, 8, 1).unwrap();
     scrypt(pass_str.as_bytes(), &key_salt, &params, &mut key)
         .map_err(|e| io_err!(e.to_string()))?;
+        
     Ok(EncryptionPackage {
         key,
         iv,

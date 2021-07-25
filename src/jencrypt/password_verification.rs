@@ -22,7 +22,8 @@ impl From<ScryptVerifyError> for VerifyError {
         VerifyError::InvalidPassword(err)
     }
 }
-
+/// Returns the password string hashed using scrypt (with a secure salt)
+/// with a length of 88
 pub fn hash_password(password: &str) -> Result<String, HasherError> {
     let salt = SaltString::generate(OsRng);
     // Hash password to PHC string using scrypt
@@ -41,4 +42,14 @@ pub fn verify_password(
     Scrypt.verify_password(target_password.as_ref().as_bytes(), &hash)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_hash_password_length() {
+        let hashed_password = hash_password("ooga booga").unwrap();
+        assert_eq!(hashed_password.len(), 88);
+    }
 }
