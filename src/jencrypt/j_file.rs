@@ -3,8 +3,7 @@ use aes::Aes128;
 use jb_utils::extensions::io::EasyRead;
 
 use crate::io_err;
-use jencrypt::create_encryption_package;
-use ofb::stream_cipher::{NewStreamCipher, SyncStreamCipher};
+use ofb::cipher::{NewStreamCipher, SyncStreamCipher};
 use ofb::Ofb;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -14,29 +13,20 @@ type AesOfb = Ofb<Aes128>;
 
 static JFILE_HEADER_SIZE: u64 = 32;
 
-fn is_file(file_name: &str) -> bool {
-    std::fs::metadata(file_name)
+fn path_is_file(file_name: &str) -> io::Result<bool> {
+    let result = std::fs::metadata(file_name)
         .map_err(|_| {
             Error::new(
                 ErrorKind::InvalidInput,
                 format!("Provided path, '{}' is not found!", file_name),
             )
-        })
-        .and_then(|meta| {
-            if !meta.is_file() {
-                Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Must provide a file to encrypt!",
-                ))
-            } else {
-                Ok(())
-            }
-        })
-        .is_ok()
+        })?
+        .is_file();
+    Ok(result)
 }
 
-fn file(filename: &str, reading: bool) -> io::Result<File> {
-    if reading && !is_file(filename) {
+pub fn make_file(filename: &str, reading: bool) -> io::Result<File> {
+    if reading && !path_is_file(filename)? {
         return Err(io_err!(format!("The file '{}' does not exist!", filename)));
     }
     let writing = !reading;
@@ -44,6 +34,7 @@ fn file(filename: &str, reading: bool) -> io::Result<File> {
         .read(reading)
         .write(writing)
         .create(writing)
+        .append(true)
         .open(filename)?;
     Ok(file)
 }
@@ -80,7 +71,7 @@ pub struct JFile {
 
 impl JFile {
     pub fn new(package: &EncryptionPackage, fname: &str, read: bool) -> io::Result<Self> {
-        let file = file(fname, read)?;
+        let file = make_file(fname, read)?;
 
         let crypter =
             AesOfb::new_var(&package.key, &package.iv).map_err(|e| io_err!(e.to_string()))?;
@@ -94,10 +85,13 @@ impl JFile {
             ciphering: true,
         })
     }
-
-    pub fn is_decrypting(&mut self, is_decrypting: bool) -> io::Result<&mut Self> {
+    /// Tells the JFile object we are treating this file as an already encrypted file.
+    ///
+    ///
+    /// when is_decrypting true, skip n-bytes (JFILE_HEADER_SIZE) of the JFile header.
+    ///
+    pub fn decryption_mode(&mut self, is_decrypting: bool) -> io::Result<&mut Self> {
         if is_decrypting {
-            println!("seeking to {}", JFILE_HEADER_SIZE);
             seek_to(&mut self.file, JFILE_HEADER_SIZE)?;
         }
         Ok(self)
@@ -112,7 +106,7 @@ impl JFile {
     ///Returns header from J-Encrypted file.
     ///`get_iv_and_salt_from_file` returns an tuple `(iv:Vec<u8>, key_salt:Vec<u8>)`
     pub fn get_iv_and_salt_from_file(fname: &str) -> io::Result<(Vec<u8>, Vec<u8>)> {
-        let mut file = file(fname, true)?;
+        let mut file = make_file(fname, true)?;
         let iv = file.read_inplace(16).map_err(|e| io_err!(e.to_string()))?;
         let key_salt = file.read_inplace(16).map_err(|e| io_err!(e.to_string()))?;
         Ok((iv, key_salt))
@@ -124,15 +118,15 @@ impl JFile {
     pub fn is_applying_cipher(&mut self, ciphering: bool) {
         self.ciphering = ciphering;
     }
-    fn apply_keystream(&mut self, buf: &mut [u8]) -> io::Result<()> {
+    fn apply_keystream(&mut self, buf: &mut [u8]) {
         if self.ciphering {
             self.crypter.apply_keystream(buf);
         }
-        Ok(())
     }
+    /// Initialize JFile with header data, (iv and salt), 32 bytes.
+    /// Writes data to beginning of file.
     fn init_write(&mut self) -> io::Result<()> {
         if !self.started_encryption {
-            println!("Writing iv and salt.");
             self.file.write_all(&self.iv)?;
             self.file.write_all(&self.key_salt)?;
             self.started_encryption = true;
@@ -143,7 +137,7 @@ impl JFile {
 impl Read for JFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let rb = self.file.read(buf)?;
-        self.apply_keystream(&mut buf[..rb])?;
+        self.apply_keystream(&mut buf[..rb]);
 
         Ok(rb)
     }
@@ -153,16 +147,17 @@ impl Write for JFile {
         self.init_write()?;
 
         let mut dat = buf.to_vec();
-        self.apply_keystream(&mut dat)?;
+        self.apply_keystream(&mut dat);
 
         Ok(self.file.write(&dat)?)
     }
 
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         self.init_write()?;
-        let mut data = buf.to_vec();
-        self.apply_keystream(&mut data)?;
-        self.file.write_all(&data)
+        let mut dat = buf.to_owned();
+        self.apply_keystream(&mut dat);
+
+        self.file.write_all(&dat)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()?;

@@ -1,4 +1,4 @@
-extern crate jencrypt;
+mod jencrypt;
 use crate::j_file::JFile;
 use crate::{exit, io_err};
 use jb_utils::extensions::io::EasyRead;
@@ -20,6 +20,7 @@ fn write_test_log(name: &str, content: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod _inner {
+
     use super::*;
 
     static TXT_DIR: &str = "txt_dir_test";
@@ -39,9 +40,10 @@ mod _inner {
         let meta = metadata(fname).unwrap_or_else(|_| {
             let file =
                 File::create(fname).unwrap_or_else(|why| exit!("Could not make file, {}", -1, why));
+
             file.metadata().unwrap()
         });
-        if meta.len() < 1000 {
+        if meta.len() < contents.len() {
             write(fname, contents)?;
         }
         Ok(())
@@ -82,9 +84,7 @@ mod _inner {
         );
         Ok(())
     }
-    fn rand_string() -> String {
-        "".into()
-    }
+
     fn make_txt_files(dir: &str, name: &str, contents: Option<String>) -> io::Result<()> {
         let contents = contents.unwrap_or(rand_string());
 
@@ -98,6 +98,7 @@ mod _inner {
         let is_making = if p_exists(TXT_DIR) {
             let entries = std::fs::read_dir(TXT_DIR)?;
             let files = entries.filter(|entry| {
+                
                 if let Ok(entry) = entry {
                     if let Ok(m) = entry.metadata() {
                         m.is_file()
@@ -163,7 +164,6 @@ mod _inner {
         }
         Ok(())
     }
-
 
     #[test]
     fn decrypt_file() -> io::Result<()> {
