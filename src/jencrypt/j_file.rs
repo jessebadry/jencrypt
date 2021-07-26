@@ -8,10 +8,30 @@ use ofb::Ofb;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::string::FromUtf8Error;
 
 type AesOfb = Ofb<Aes128>;
 
-static JFILE_HEADER_SIZE: u64 = 32;
+const PASSWORD_HASH_SIZE: usize = 88;
+const SALT_SIZE: usize = 16;
+const IV_SIZE: usize = 16;
+const JFILE_HEADER_SIZE: usize = PASSWORD_HASH_SIZE + SALT_SIZE + IV_SIZE;
+
+pub enum ParseError {
+    InvalidPasswordHash(&'static str),
+    IOError(std::io::Error),
+}
+impl From<FromUtf8Error> for ParseError {
+    fn from(_err: FromUtf8Error) -> Self {
+        /*Log Error here */
+        ParseError::InvalidPasswordHash("The password hash within the requested file is invalid.")
+    }
+}
+impl From<std::io::Error> for ParseError {
+    fn from(err: std::io::Error) -> Self {
+        ParseError::IOError(err)
+    }
+}
 
 fn path_is_file(file_name: &str) -> io::Result<bool> {
     let result = std::fs::metadata(file_name)
@@ -85,31 +105,23 @@ impl JFile {
             ciphering: true,
         })
     }
-    /// Tells the JFile object we are treating this file as an already encrypted file.
+
     ///
-    ///
-    /// when is_decrypting true, skip n-bytes (JFILE_HEADER_SIZE) of the JFile header.
-    ///
-    pub fn decryption_mode(&mut self, is_decrypting: bool) -> io::Result<&mut Self> {
-        if is_decrypting {
-            seek_to(&mut self.file, JFILE_HEADER_SIZE)?;
-        }
+    pub fn initialize_decryption(&mut self) -> io::Result<&mut Self> {
+        seek_to(&mut self.file, JFILE_HEADER_SIZE as u64)?;
+
         Ok(self)
     }
-    //returns (iv:Vec<u8>, salt:Vec<u8>)
-    pub fn get_iv_and_salt<T: Read>(file: &mut T) -> io::Result<(Vec<u8>, Vec<u8>)> {
-        let iv = file.read_inplace(16).map_err(|e| io_err!(e.to_string()))?;
-        let key_salt = file.read_inplace(16).map_err(|e| io_err!(e.to_string()))?;
-        Ok((iv, key_salt))
-    }
 
-    ///Returns header from J-Encrypted file.
-    ///`get_iv_and_salt_from_file` returns an tuple `(iv:Vec<u8>, key_salt:Vec<u8>)`
-    pub fn get_iv_and_salt_from_file(fname: &str) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    ///Returns header-data from J-Encrypted file.
+    pub fn parse_header(fname: &str) -> Result<(Vec<u8>, Vec<u8>, String), ParseError> {
         let mut file = make_file(fname, true)?;
-        let iv = file.read_inplace(16).map_err(|e| io_err!(e.to_string()))?;
-        let key_salt = file.read_inplace(16).map_err(|e| io_err!(e.to_string()))?;
-        Ok((iv, key_salt))
+
+        let pass_hash = String::from_utf8(file.read_inplace(PASSWORD_HASH_SIZE)?)?;
+        let iv = file.read_inplace(IV_SIZE)?;
+        let key_salt = file.read_inplace(SALT_SIZE)?;
+
+        Ok((iv, key_salt, pass_hash))
     }
     pub fn raw_write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         self.file.write_all(buf)?;

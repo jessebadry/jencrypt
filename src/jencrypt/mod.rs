@@ -7,7 +7,7 @@ use self::password_verification::VerifyError::*;
 use self::password_verification::*;
 use crate::io_err;
 
-use j_file::{make_file, JFile};
+use j_file::{make_file, JFile, ParseError};
 use jb_utils::extensions::io::EasyRead;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -15,7 +15,15 @@ use scrypt::{scrypt, Params};
 use std::fs::{remove_file, rename};
 use std::io;
 use std::io::Write;
-use std::ptr::hash;
+
+impl From<ParseError> for std::io::Error {
+    fn from(error: ParseError) -> Self {
+        match error {
+            ParseError::InvalidPasswordHash(err) => io_err!(err),
+            ParseError::IOError(err) => err,
+        }
+    }
+}
 
 #[readonly::make]
 pub struct EncryptionPackage {
@@ -36,34 +44,41 @@ fn fill_random_secure(data: &mut [u8]) -> io::Result<()> {
 //     Ok(r.next_u64())
 // }
 
-pub fn create_encryption_package(
-    pass_str: &str,
+fn validate_encryption_package(
     salt: Option<Vec<u8>>,
     iv: Option<Vec<u8>>,
-) -> io::Result<EncryptionPackage> {
-
+    pass_hash: Option<String>,
+) -> io::Result<()> {
     if salt.as_ref().map(|salt| salt.len() != 16).unwrap_or(false)
         || iv.as_ref().map(|iv| iv.len() != 16).unwrap_or(false)
     {
         return Err(io_err!("salt or iv was not 16 bytes long!"));
     }
 
+    Ok(())
+}
+
+pub fn create_encryption_package(
+    pass_str: &str,
+    salt: Option<Vec<u8>>,
+    iv: Option<Vec<u8>>,
+    pass_hash: Option<String>,
+) -> io::Result<EncryptionPackage> {
     let key_salt = salt.unwrap_or(make_random_16b()?);
     let iv = iv.unwrap_or(make_random_16b()?);
+    let password_hash = pass_hash.unwrap_or(hash_password(pass_str).map_err(|e| io_err!(e))?);
 
     let mut key = vec![0; 16];
     let params = Params::new(14, 8, 1).unwrap();
     scrypt(pass_str.as_bytes(), &key_salt, &params, &mut key)
         .map_err(|e| io_err!(e.to_string()))?;
-        
+
     Ok(EncryptionPackage {
         key,
         iv,
         key_salt,
 
-        password_hash: hash_password(pass_str)
-            .map_err(|e| io_err!(e.to_string()))?
-            .to_string(),
+        password_hash,
     })
 }
 fn make_random_16b() -> io::Result<Vec<u8>> {
@@ -93,11 +108,11 @@ fn cipher_file(pack: &EncryptionPackage, fname: &str, encrypting: bool) -> io::R
     let mut jfile = JFile::new(&pack, jfile_name, reading)?;
 
     // Do setup for decryption method if we are reading, reading in our case means decrypting.
-    jfile.decryption_mode(reading)?;
 
     if encrypting {
         impl_cipher(normal_file, jfile)?;
     } else {
+        jfile.initialize_decryption()?;
         impl_cipher(jfile, normal_file)?;
     }
     remove_file(fname)?;
@@ -119,11 +134,13 @@ fn impl_cipher<T: EasyRead, E: Write>(mut input: T, mut output: E) -> io::Result
     Ok(())
 }
 pub fn encrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
-    let pack = create_encryption_package(pswd, None, None)?;
+    let pack = create_encryption_package(pswd, None, None, None)?;
     cipher_file(&pack, fname, true)
 }
 pub fn decrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
-    if let Err(e) = verify_password(pswd, "") {
+
+    let (iv, salt, pass_hash) = JFile::parse_header(fname)?;
+    if let Err(e) = verify_password(pswd, &pass_hash) {
         println!(
             "{}",
             match e {
@@ -138,7 +155,7 @@ pub fn decrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
             }
         );
     }
-    let (iv, salt) = JFile::get_iv_and_salt_from_file(fname)?;
-    let pack = create_encryption_package(pswd, Some(salt), Some(iv))?;
+
+    let pack = create_encryption_package(pswd, Some(salt), Some(iv), Some(pass_hash))?;
     cipher_file(&pack, fname, false)
 }
