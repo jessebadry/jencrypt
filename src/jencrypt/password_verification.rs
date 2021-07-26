@@ -5,8 +5,8 @@ use scrypt::{
     },
     Scrypt,
 };
-
 use rand::rngs::OsRng;
+
 pub enum VerifyError {
     IncorrectHash(HashError),
     InvalidPassword(ScryptVerifyError),
@@ -38,6 +38,7 @@ pub fn verify_password(
     target_password: impl AsRef<str>,
     hashed_password: &str,
 ) -> Result<(), VerifyError> {
+
     let hash = PasswordHash::new(hashed_password)?;
     Scrypt.verify_password(target_password.as_ref().as_bytes(), &hash)?;
 
@@ -50,6 +51,7 @@ mod tests {
     #[test]
     fn test_hash_password_length() {
         let hashed_password = hash_password("ooga booga").unwrap();
+
         assert_eq!(hashed_password.len(), 88);
     }
 }

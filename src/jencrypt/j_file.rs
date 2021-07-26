@@ -1,4 +1,4 @@
-use crate::EncryptionPackage;
+use crate::encryption_package::EncryptionPackage;
 use aes::Aes128;
 use jb_utils::extensions::io::EasyRead;
 
@@ -7,15 +7,15 @@ use ofb::cipher::{NewStreamCipher, SyncStreamCipher};
 use ofb::Ofb;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::string::FromUtf8Error;
 
 type AesOfb = Ofb<Aes128>;
 
-const PASSWORD_HASH_SIZE: usize = 88;
-const SALT_SIZE: usize = 16;
-const IV_SIZE: usize = 16;
-const JFILE_HEADER_SIZE: usize = PASSWORD_HASH_SIZE + SALT_SIZE + IV_SIZE;
+pub const PASSWORD_HASH_SIZE: usize = 88;
+pub const SALT_SIZE: usize = 16;
+pub const IV_SIZE: usize = 16;
+pub const JFILE_HEADER_SIZE: usize = PASSWORD_HASH_SIZE + SALT_SIZE + IV_SIZE;
 
 pub enum ParseError {
     InvalidPasswordHash(&'static str),
@@ -34,17 +34,13 @@ impl From<std::io::Error> for ParseError {
 }
 
 fn path_is_file(file_name: &str) -> io::Result<bool> {
-    let result = std::fs::metadata(file_name)
-        .map_err(|_| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("Provided path, '{}' is not found!", file_name),
-            )
-        })?
-        .is_file();
+    let result = std::fs::metadata(file_name)?.is_file();
     Ok(result)
 }
-
+/// Makes an append-based file.
+///
+/// # Errors
+/// * if `filename` is not a file in the file-system
 pub fn make_file(filename: &str, reading: bool) -> io::Result<File> {
     if reading && !path_is_file(filename)? {
         return Err(io_err!(format!("The file '{}' does not exist!", filename)));
@@ -73,7 +69,9 @@ pub fn make_file(filename: &str, reading: bool) -> io::Result<File> {
 ///
 /// # Errors
 ///
-/// Seeking to a negative offset is considered an error.
+/// Seeking can fail, for example because it might involve flushing a buffer.
+///
+///Seeking to a negative offset is considered an error.
 ///
 /// [`SeekFrom::Start`]: enum.SeekFrom.html#variant.Start
 fn seek_to<T: Seek>(io_obj: &mut T, pos: u64) -> io::Result<u64> {
@@ -83,10 +81,10 @@ fn seek_to<T: Seek>(io_obj: &mut T, pos: u64) -> io::Result<u64> {
 pub struct JFile {
     crypter: AesOfb,
     file: File,
-    ciphering: bool,
-    started_encryption: bool,
+    initialized: bool,
     iv: Vec<u8>,
     key_salt: Vec<u8>,
+    password_hash: String,
 }
 
 impl JFile {
@@ -99,10 +97,11 @@ impl JFile {
         Ok(JFile {
             crypter,
             file,
-            started_encryption: false,
+            initialized: false,
+
             iv: package.iv.clone(),
             key_salt: package.key_salt.clone(),
-            ciphering: true,
+            password_hash: package.password_hash.clone(),
         })
     }
 
@@ -113,7 +112,12 @@ impl JFile {
         Ok(self)
     }
 
-    ///Returns header-data from J-Encrypted file.
+    /// Returns header-data from J-Encrypted file.
+    /// ## Header Requirements
+    ///
+    /// * 88 character hashed password
+    /// * 16-bit IV
+    /// * 16-bit Salt
     pub fn parse_header(fname: &str) -> Result<(Vec<u8>, Vec<u8>, String), ParseError> {
         let mut file = make_file(fname, true)?;
 
@@ -127,21 +131,21 @@ impl JFile {
         self.file.write_all(buf)?;
         Ok(())
     }
-    pub fn is_applying_cipher(&mut self, ciphering: bool) {
-        self.ciphering = ciphering;
-    }
+
     fn apply_keystream(&mut self, buf: &mut [u8]) {
-        if self.ciphering {
-            self.crypter.apply_keystream(buf);
-        }
+        self.crypter.apply_keystream(buf);
     }
-    /// Initialize JFile with header data, (iv and salt), 32 bytes.
+    /// Initialize JFile with header data, (iv and salt), 32 bytes if not already initialized.
     /// Writes data to beginning of file.
-    fn init_write(&mut self) -> io::Result<()> {
-        if !self.started_encryption {
+    fn write_header_data(&mut self) -> io::Result<()> {
+        let not_initialized = !self.initialized;
+
+        if not_initialized {
+            self.file.write_all(self.password_hash.as_bytes())?;
             self.file.write_all(&self.iv)?;
             self.file.write_all(&self.key_salt)?;
-            self.started_encryption = true;
+
+            self.initialized = true;
         }
         Ok(())
     }
@@ -156,16 +160,16 @@ impl Read for JFile {
 }
 impl Write for JFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.init_write()?;
+        self.write_header_data()?;
 
         let mut dat = buf.to_vec();
         self.apply_keystream(&mut dat);
 
-        Ok(self.file.write(&dat)?)
+        self.file.write(&dat)
     }
 
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.init_write()?;
+        self.write_header_data()?;
         let mut dat = buf.to_owned();
         self.apply_keystream(&mut dat);
 
