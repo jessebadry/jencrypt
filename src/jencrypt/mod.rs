@@ -15,18 +15,18 @@ use std::io;
 use std::io::Write;
 
 /// The main cipher procedure using JFile.
-/// 
+///
 /// JFile is the encryptor / decryptor.
-/// 
+///
 /// # The Algorithm
-/// * 1. Create a temporary file
-/// * 2. Determine the file names for the normal file object and the JFile(encrypt/decryptor) object.
+/// *  Create a temporary file
+/// *  Determine the file names for the normal file object and the JFile(encrypt/decryptor) object.
 ///     * if encrypting, use the user provided file name for the raw file, and a temporary file name for the JFile
 ///     * if decrypting, use the temporary name for the raw file, and the user-provided name for the JFile
-/// * 3. Determine the input file and output files
+/// *  Determine the input file and output files
 ///     * if encrypting, input from the raw file to the JFile
 ///     * if decrypting, initialize decryption on the JFile, then input from JFile and output to the raw file
-/// * 4. Then remove the original file, rename the temporary file to the original file, finishing the encryption/decryption.
+/// *  Then remove the original file, rename the temporary file to the original file, finishing the encryption/decryption.
 fn cipher_file(pack: &EncryptionPackage, fname: &str, encrypting: bool) -> io::Result<()> {
     let temp_name = format!("{}.temp", fname);
     let temp_name = temp_name.as_str();
@@ -69,7 +69,7 @@ fn impl_cipher<T: EasyRead, E: Write>(mut input: T, mut output: E) -> io::Result
     Ok(())
 }
 pub fn encrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
-    let pack = create_encryption_package(pswd, None, None, None)?;
+    let pack = EncryptionPackage::generate(pswd, None, None, None)?;
     cipher_file(&pack, fname, true)
 }
 pub fn decrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
@@ -77,13 +77,13 @@ pub fn decrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
 
     verify_password(pswd, &pass_hash).unwrap_or_else(handle_verification_error);
 
-    let pack = create_encryption_package(pswd, Some(salt), Some(iv), Some(pass_hash))?;
+    let pack = EncryptionPackage::generate(pswd, Some(salt), Some(iv), Some(pass_hash))?;
 
     cipher_file(&pack, fname, false)
 }
 
 /// Prints a corresponding user message then aborts the application.
-/// 
+///
 /// * Aborts(-1) on end of execution
 fn handle_verification_error(err: VerifyError) {
     println!(

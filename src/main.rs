@@ -8,15 +8,29 @@ extern crate webbrowser;
 mod jencrypt;
 use jb_utils::io_err;
 use jb_utils::jb_inputs::input;
+use std::io::{Error as IOError, ErrorKind};
+
 pub use jencrypt::*;
-use rand::rngs::OsRng;
-use rand::RngCore;
-use scrypt::{
-  password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-  Scrypt,
-};
+
+use jencrypt::j_file::JFile;
 use std::fmt::Debug;
 
+#[derive(Debug)]
+enum Error {
+  IOErr(IOError),
+  InvalidInput(String),
+  Other(),
+}
+impl From<IOError> for Error {
+  fn from(err: IOError) -> Error {
+    let err = match err.kind() {
+      ErrorKind::NotFound => Self::InvalidInput(err.to_string()),
+      _ => Self::IOErr(err),
+    };
+
+   err
+  }
+}
 fn repeat_while_err<T, V: Debug>(mut value: impl FnMut() -> Result<T, V>) -> T {
   let mut val = value();
   while val.is_err() {
@@ -24,13 +38,14 @@ fn repeat_while_err<T, V: Debug>(mut value: impl FnMut() -> Result<T, V>) -> T {
   }
   val.unwrap()
 }
-fn main() {
+
+fn main() -> Result<(), Error> {
   let password = input("Enter password /> ");
   let fname = input("Enter filename /> ");
 
-  let encrypting = input("Are you locking a file? y/n").to_lowercase().trim() == "y";
+  let encrypting = !JFile::file_contains_header(&fname)?;
 
-  let lock_method = if encrypting {
+  let crypt_method = if encrypting {
     jencrypt::encrypt_file
   } else {
     jencrypt::decrypt_file
@@ -38,14 +53,14 @@ fn main() {
 
   let method_name = if encrypting { "locked" } else { "unlocked" };
 
-  if let Err(e) = lock_method(&password, &fname) {
+  if let Err(e) = crypt_method(&password, &fname) {
     println!("{}", e);
   } else {
     println!("Successfully {} '{}' ", method_name, fname);
 
     if !encrypting {
-      webbrowser::open(&fname).unwrap_or_else(|e| panic!("Couldn't open '{}', why: {}", fname, e));
+      webbrowser::open(&fname).expect(&format!("Couldn't open '{}'", fname));
     }
   }
-  input("");
+  Ok(())
 }

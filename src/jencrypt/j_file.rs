@@ -7,7 +7,7 @@ use ofb::cipher::{NewStreamCipher, SyncStreamCipher};
 use ofb::Ofb;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::string::FromUtf8Error;
 
 type AesOfb = Ofb<Aes128>;
@@ -33,17 +33,26 @@ impl From<std::io::Error> for ParseError {
     }
 }
 
-fn path_is_file(file_name: &str) -> io::Result<bool> {
-    let result = std::fs::metadata(file_name)?.is_file();
-    Ok(result)
+fn check_if_file_exists(fname: &str) -> io::Result<()> {
+    let result = std::fs::metadata(fname)?.is_file();
+
+    if !result {
+        return Err(io_err!(
+            ErrorKind::NotFound,
+            format!("The file '{}' does not exist!", fname)
+        ));
+    }
+
+    Ok(())
 }
 /// Makes an append-based file.
 ///
 /// # Errors
 /// * if `filename` is not a file in the file-system
-pub fn make_file(filename: &str, reading: bool) -> io::Result<File> {
-    if reading && !path_is_file(filename)? {
-        return Err(io_err!(format!("The file '{}' does not exist!", filename)));
+/// * Any other IO error
+pub fn make_file(fname: &str, reading: bool) -> io::Result<File> {
+    if reading {
+        check_if_file_exists(fname)?;
     }
     let writing = !reading;
     let file = OpenOptions::new()
@@ -51,7 +60,7 @@ pub fn make_file(filename: &str, reading: bool) -> io::Result<File> {
         .write(writing)
         .create(writing)
         .append(true)
-        .open(filename)?;
+        .open(fname)?;
     Ok(file)
 }
 
@@ -111,7 +120,16 @@ impl JFile {
 
         Ok(self)
     }
+    /// Determines if the file contains the encryption header.
+    pub fn file_contains_header(fname: &str) -> io::Result<bool> {
+        check_if_file_exists(fname)?;
+        let mut file = make_file(fname, true)?;
 
+        let header = String::from_utf8(file.read_inplace(16)?);
+        Ok(header
+            .map(|string| string.starts_with("$scrypt"))
+            .unwrap_or(false))
+    }
     /// Returns header-data from J-Encrypted file.
     /// ## Header Requirements
     ///
