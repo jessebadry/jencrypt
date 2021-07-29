@@ -68,18 +68,28 @@ fn impl_cipher<T: EasyRead, E: Write>(mut input: T, mut output: E) -> io::Result
     }
     Ok(())
 }
-pub fn encrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
-    let pack = EncryptionPackage::generate(pswd, None, None, None)?;
-    cipher_file(&pack, fname, true)
-}
-pub fn decrypt_file(pswd: &str, fname: &str) -> io::Result<()> {
-    let (iv, salt, pass_hash) = JFile::parse_header(fname)?;
 
+pub fn encrypt_files(pswd: &str, fnames: &Vec<impl AsRef<str>>) -> io::Result<()> {
+    let pack = EncryptionPackage::generate(pswd, None, None, None)?;
+    for fname in fnames {
+        if let Err(e) = cipher_file(&pack, fname.as_ref(), true) {
+            println!("Error encrypting '{}', why: {}", fname.as_ref(), e);
+        }
+    }
+    Ok(())
+}
+pub fn decrypt_files(pswd: &str, fnames: &Vec<impl AsRef<str>>) -> io::Result<()> {
+    let (iv, salt, pass_hash) = JFile::parse_header(fnames[0].as_ref())?;
     verify_password(pswd, &pass_hash).unwrap_or_else(handle_verification_error);
 
     let pack = EncryptionPackage::generate(pswd, Some(salt), Some(iv), Some(pass_hash))?;
 
-    cipher_file(&pack, fname, false)
+    for fname in fnames {
+        if let Err(e) = cipher_file(&pack, fname.as_ref(), false) {
+            println!("Error decrypting '{}', why: {}", fname.as_ref(), e);
+        }
+    }
+    Ok(())
 }
 
 /// Prints a corresponding user message then aborts the application.

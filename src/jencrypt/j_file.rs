@@ -34,9 +34,9 @@ impl From<std::io::Error> for ParseError {
 }
 
 fn check_if_file_exists(fname: &str) -> io::Result<()> {
-    let result = std::fs::metadata(fname)?.is_file();
+    let is_file = std::fs::metadata(fname)?.is_file();
 
-    if !result {
+    if !is_file {
         return Err(io_err!(
             ErrorKind::NotFound,
             format!("The file '{}' does not exist!", fname)
