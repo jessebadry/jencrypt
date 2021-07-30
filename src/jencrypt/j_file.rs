@@ -8,15 +8,18 @@ use ofb::Ofb;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::string::FromUtf8Error;
 
+type HeaderData = (Vec<u8>, Vec<u8>, String);
 type AesOfb = Ofb<Aes128>;
-
 pub const PASSWORD_HASH_SIZE: usize = 88;
 pub const SALT_SIZE: usize = 16;
 pub const IV_SIZE: usize = 16;
 pub const JFILE_HEADER_SIZE: usize = PASSWORD_HASH_SIZE + SALT_SIZE + IV_SIZE;
 
+/// used to validate the string `"$scrypt"` within a encrypted file header.
+const VALIDATION_LENGTH: usize = 7;
 pub enum ParseError {
     InvalidPasswordHash(&'static str),
     IOError(std::io::Error),
@@ -33,13 +36,16 @@ impl From<std::io::Error> for ParseError {
     }
 }
 
-fn check_if_file_exists(fname: &str) -> io::Result<()> {
-    let is_file = std::fs::metadata(fname)?.is_file();
+fn check_if_file_exists<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
+    let is_file = std::fs::metadata(&fname)?.is_file();
 
     if !is_file {
         return Err(io_err!(
             ErrorKind::NotFound,
-            format!("The file '{}' does not exist!", fname)
+            format!(
+                "The file '{}' does not exist!",
+                fname.as_ref().to_str().unwrap()
+            )
         ));
     }
 
@@ -50,7 +56,7 @@ fn check_if_file_exists(fname: &str) -> io::Result<()> {
 /// # Errors
 /// * if `filename` is not a file in the file-system
 /// * Any other IO error
-pub fn make_file(fname: &str, reading: bool) -> io::Result<File> {
+pub fn make_file<P: ?Sized + AsRef<Path>>(fname: &P, reading: bool) -> io::Result<File> {
     if reading {
         check_if_file_exists(fname)?;
     }
@@ -97,7 +103,11 @@ pub struct JFile {
 }
 
 impl JFile {
-    pub fn new(package: &EncryptionPackage, fname: &str, read: bool) -> io::Result<Self> {
+    pub fn new<P: ?Sized + AsRef<Path>>(
+        package: &EncryptionPackage,
+        fname: &P,
+        read: bool,
+    ) -> io::Result<Self> {
         let file = make_file(fname, read)?;
 
         let crypter =
@@ -121,11 +131,15 @@ impl JFile {
         Ok(self)
     }
     /// Determines if the file contains the encryption header.
-    pub fn file_contains_header(fname: &str) -> io::Result<bool> {
-        check_if_file_exists(fname)?;
-        let mut file = make_file(fname, true)?;
+    /// # WARNING
+    /// this method doesn't validate the salt and iv, it only promises to ensure
+    /// the header returns false  if the first 16 bytes are not utf8
+    /// and if the first 7 bytes wasn't tampered with.
+    pub fn file_contains_header<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<bool> {
+        check_if_file_exists(fname.as_ref())?;
+        let mut file = make_file(fname.as_ref(), true)?;
 
-        let header = String::from_utf8(file.read_inplace(16)?);
+        let header = String::from_utf8(file.read_inplace(VALIDATION_LENGTH)?);
         Ok(header
             .map(|string| string.starts_with("$scrypt"))
             .unwrap_or(false))
@@ -133,10 +147,10 @@ impl JFile {
     /// Returns header-data from J-Encrypted file.
     /// ## Header Requirements
     ///
-    /// * 88 character hashed password
     /// * 16-bit IV
     /// * 16-bit Salt
-    pub fn parse_header(fname: &str) -> Result<(Vec<u8>, Vec<u8>, String), ParseError> {
+    /// * 88 character hashed password
+    pub fn parse_header<P: ?Sized + AsRef<Path>>(fname: &P) -> Result<HeaderData, ParseError> {
         let mut file = make_file(fname, true)?;
 
         let pass_hash = String::from_utf8(file.read_inplace(PASSWORD_HASH_SIZE)?)?;

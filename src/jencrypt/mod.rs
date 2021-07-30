@@ -13,6 +13,7 @@ use jb_utils::extensions::io::EasyRead;
 use std::fs::{remove_file, rename};
 use std::io;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// The main cipher procedure using JFile.
 ///
@@ -27,9 +28,11 @@ use std::io::Write;
 ///     * if encrypting, input from the raw file to the JFile
 ///     * if decrypting, initialize decryption on the JFile, then input from JFile and output to the raw file
 /// *  Then remove the original file, rename the temporary file to the original file, finishing the encryption/decryption.
-fn cipher_file(pack: &EncryptionPackage, fname: &str, encrypting: bool) -> io::Result<()> {
-    let temp_name = format!("{}.temp", fname);
-    let temp_name = temp_name.as_str();
+fn cipher_file<P: AsRef<Path>>(pack: &EncryptionPackage, fname: P, encrypting: bool) -> io::Result<()> {
+    let fname = fname.as_ref();
+    let mut temp_name = PathBuf::from(fname);
+    temp_name.set_extension("tmp");
+    let temp_name = temp_name.as_path();
     let reading = !encrypting;
 
     let (raw_file_name, jfile_name) = if encrypting {
@@ -69,16 +72,16 @@ fn impl_cipher<T: EasyRead, E: Write>(mut input: T, mut output: E) -> io::Result
     Ok(())
 }
 
-pub fn encrypt_files(pswd: &str, fnames: &Vec<impl AsRef<str>>) -> io::Result<()> {
+pub fn encrypt_files<P: AsRef<Path>>(pswd: &str, fnames: &[P]) -> io::Result<()> {
     let pack = EncryptionPackage::generate(pswd, None, None, None)?;
     for fname in fnames {
         if let Err(e) = cipher_file(&pack, fname.as_ref(), true) {
-            println!("Error encrypting '{}', why: {}", fname.as_ref(), e);
+            println!("Error encrypting '{}', why: {}", fname.as_ref().display(), e);
         }
     }
     Ok(())
 }
-pub fn decrypt_files(pswd: &str, fnames: &Vec<impl AsRef<str>>) -> io::Result<()> {
+pub fn decrypt_files<P: AsRef<Path>>(pswd: &str, fnames: &[P]) -> io::Result<()> {
     let (iv, salt, pass_hash) = JFile::parse_header(fnames[0].as_ref())?;
     verify_password(pswd, &pass_hash).unwrap_or_else(handle_verification_error);
 
@@ -86,7 +89,7 @@ pub fn decrypt_files(pswd: &str, fnames: &Vec<impl AsRef<str>>) -> io::Result<()
 
     for fname in fnames {
         if let Err(e) = cipher_file(&pack, fname.as_ref(), false) {
-            println!("Error decrypting '{}', why: {}", fname.as_ref(), e);
+            println!("Error decrypting '{}', why: {}", fname.as_ref().display(), e);
         }
     }
     Ok(())
