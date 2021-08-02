@@ -1,6 +1,6 @@
 [package]
 name = "jencrypt"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Jesse Badry <jessebadry@gmail.com>"]
 
 [dependencies]
@@ -16,5 +16,5 @@ readonly = "0.2.0"
 jb_utils = {git="https://github.com/jessebadry/Jesse-s-Utils.git"}
 webbrowser = "0.5.5"
 [lib]
-name = "jencryptlib"
+name = "jencrypt"
 crate-type = ["rlib","dylib"]
