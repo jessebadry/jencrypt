@@ -13,26 +13,37 @@ use std::string::FromUtf8Error;
 
 type HeaderData = (Vec<u8>, Vec<u8>, String);
 type AesOfb = Ofb<Aes128>;
+
 pub const PASSWORD_HASH_SIZE: usize = 88;
 pub const SALT_SIZE: usize = 16;
 pub const IV_SIZE: usize = 16;
 pub const JFILE_HEADER_SIZE: usize = PASSWORD_HASH_SIZE + SALT_SIZE + IV_SIZE;
-
 /// used to validate the string `"$scrypt"` within a encrypted file header.
 const VALIDATION_LENGTH: usize = 7;
-pub enum ParseError {
+#[derive(Debug)]
+pub enum HeaderParserError {
     InvalidPasswordHash(&'static str),
     IOError(std::io::Error),
 }
-impl From<FromUtf8Error> for ParseError {
-    fn from(_err: FromUtf8Error) -> Self {
-        /*Log Error here */
-        ParseError::InvalidPasswordHash("The password hash within the requested file is invalid.")
+impl From<HeaderParserError> for std::io::Error {
+    fn from(error: HeaderParserError) -> Self {
+        match error {
+            HeaderParserError::InvalidPasswordHash(err) => io_err!(err),
+            HeaderParserError::IOError(err) => err,
+        }
     }
 }
-impl From<std::io::Error> for ParseError {
-    fn from(err: std::io::Error) -> Self {
-        ParseError::IOError(err)
+impl From<std::io::Error> for HeaderParserError {
+    fn from(error: std::io::Error) -> Self {
+        Self::IOError(error)
+    }
+}
+impl From<FromUtf8Error> for HeaderParserError {
+    fn from(_err: FromUtf8Error) -> Self {
+        /*Log Error here */
+        HeaderParserError::InvalidPasswordHash(
+            "The password hash within the requested file is invalid.",
+        )
     }
 }
 
@@ -70,29 +81,6 @@ pub fn make_file<P: ?Sized + AsRef<Path>>(fname: &P, reading: bool) -> io::Resul
     Ok(file)
 }
 
-///Wrapper around  the seek function, simply converts the pos to the Seek equivalent value
-/// and uses it to seek to that position in bytes
-/// ->
-/// Seek to an offset, in bytes, in a stream.
-///
-/// A seek beyond the end of a stream is allowed, but behavior is defined
-/// by the implementation.
-///
-/// If the seek operation completed successfully,
-/// this method returns the new position from the start of the stream.
-/// That position can be used later with [`SeekFrom::Start`].
-///
-/// # Errors
-///
-/// Seeking can fail, for example because it might involve flushing a buffer.
-///
-///Seeking to a negative offset is considered an error.
-///
-/// [`SeekFrom::Start`]: enum.SeekFrom.html#variant.Start
-fn seek_to<T: Seek>(io_obj: &mut T, pos: u64) -> io::Result<u64> {
-    io_obj.seek(SeekFrom::Start(pos))
-}
-
 pub struct JFile {
     crypter: AesOfb,
     file: File,
@@ -125,10 +113,10 @@ impl JFile {
     }
 
     ///
-    pub fn initialize_decryption(&mut self) -> io::Result<&mut Self> {
-        seek_to(&mut self.file, JFILE_HEADER_SIZE as u64)?;
-
-        Ok(self)
+    pub fn initialize_decryption(&mut self) -> io::Result<()> {
+        
+        self.file.seek(SeekFrom::Start(JFILE_HEADER_SIZE as u64))?;
+        Ok(())
     }
     /// Determines if the file contains the encryption header.
     /// # WARNING
@@ -136,7 +124,6 @@ impl JFile {
     /// the header returns false  if the first 16 bytes are not utf8
     /// and if the first 7 bytes wasn't tampered with.
     pub fn file_contains_header<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<bool> {
-        check_if_file_exists(fname.as_ref())?;
         let mut file = make_file(fname.as_ref(), true)?;
 
         let header = String::from_utf8(file.read_inplace(VALIDATION_LENGTH)?);
@@ -150,7 +137,9 @@ impl JFile {
     /// * 16-bit IV
     /// * 16-bit Salt
     /// * 88 character hashed password
-    pub fn parse_header<P: ?Sized + AsRef<Path>>(fname: &P) -> Result<HeaderData, ParseError> {
+    pub fn parse_header<P: ?Sized + AsRef<Path>>(
+        fname: &P,
+    ) -> Result<HeaderData, HeaderParserError> {
         let mut file = make_file(fname, true)?;
 
         let pass_hash = String::from_utf8(file.read_inplace(PASSWORD_HASH_SIZE)?)?;

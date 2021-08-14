@@ -1,20 +1,20 @@
 [package]
 name = "jencrypt"
-version = "1.0.0"
+version = "2.0.0"
 authors = ["Jesse Badry <jessebadry@gmail.com>"]
 
 [dependencies]
 libc = "0.2.71"
 scrypt = "0.6.4"
 base64 = "0.13.0"
-nfd = "0.0.4"
+nfd = { git = "https://github.com/saurvs/nfd-rs.git", optional = true}
 ofb = "0.4.0"
 aes = "0.6.0"
 cipher = "0.2.5"
 rand = "0.8.3"
 readonly = "0.2.0"
 jb_utils = {git="https://github.com/jessebadry/Jesse-s-Utils.git"}
-webbrowser = "0.5.5"
-[lib]
-name = "jencrypt"
-crate-type = ["rlib","dylib"]
+
+
+[features]
+cli = ["nfd"]

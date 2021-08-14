@@ -1,3 +1,4 @@
+use rand::rngs::OsRng;
 use scrypt::{
     password_hash::{
         HashError, HasherError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
@@ -5,16 +6,27 @@ use scrypt::{
     },
     Scrypt,
 };
-use rand::rngs::OsRng;
+use std::fmt;
 
+#[derive(Debug)]
 pub enum VerifyError {
-    IncorrectHash(HashError),
     InvalidPassword(ScryptVerifyError),
+    InvalidPasswordHash(HashError),
+}
+impl fmt::Display for VerifyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let user_message = match self {
+            VerifyError::InvalidPassword(_) => "The password entered was incorrect.",
+            VerifyError::InvalidPasswordHash(_) => "The file given was corrupt. (Invalid header)",
+        };
+
+        write!(formatter, "{}", user_message)
+    }
 }
 
 impl From<HashError> for VerifyError {
     fn from(err: HashError) -> Self {
-        VerifyError::IncorrectHash(err)
+        VerifyError::InvalidPasswordHash(err)
     }
 }
 impl From<ScryptVerifyError> for VerifyError {
@@ -38,7 +50,6 @@ pub fn verify_password(
     target_password: impl AsRef<str>,
     hashed_password: &str,
 ) -> Result<(), VerifyError> {
-
     let hash = PasswordHash::new(hashed_password)?;
     Scrypt.verify_password(target_password.as_ref().as_bytes(), &hash)?;
 
@@ -50,7 +61,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_hash_password_length() {
-        let hashed_password = hash_password("ooga booga").unwrap();
+        let hashed_password = hash_password("ooga booga").expect("hash password failed");
 
         assert_eq!(hashed_password.len(), 88);
     }
