@@ -34,13 +34,14 @@ mod cli {
         let files = user_select_files();
 
         println!("file 0 = {}", &files[0]);
-        let decrypting = jencrypt::j_file::JFile::file_contains_header(&files[0])
+        let decrypting = jencrypt::jfile::file_contains_header(&files[0])
             .expect("Couldn't read Document header!");
         // if no header and we are decrypting, this means this file is not encrypted.
 
         let crypt_method = if decrypting {
             jencrypt::decrypt_files
         } else {
+            println!("encrypting files.");
             jencrypt::encrypt_files
         };
 

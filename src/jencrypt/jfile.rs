@@ -1,13 +1,12 @@
 use crate::encryption_package::EncryptionPackage;
+use crate::io_err;
 use aes::Aes128;
 use jb_utils::extensions::io::EasyRead;
-
-use crate::io_err;
 use ofb::cipher::{NewStreamCipher, SyncStreamCipher};
 use ofb::Ofb;
+use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io;
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::string::FromUtf8Error;
 
@@ -25,6 +24,13 @@ pub enum HeaderParserError {
     InvalidPasswordHash(&'static str),
     IOError(std::io::Error),
 }
+impl fmt::Display for HeaderParserError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "1")
+    }
+}
+impl std::error::Error for HeaderParserError {}
+
 impl From<HeaderParserError> for std::io::Error {
     fn from(error: HeaderParserError) -> Self {
         match error {
@@ -83,27 +89,53 @@ pub fn make_file<P: ?Sized + AsRef<Path>>(fname: &P, reading: bool) -> io::Resul
 
 pub struct JFile {
     crypter: AesOfb,
-    file: File,
+    pub file: File,
     initialized: bool,
     iv: Vec<u8>,
     key_salt: Vec<u8>,
     password_hash: String,
 }
 
+/// Determines if the file contains the encryption header.
+/// # WARNING
+/// this method doesn't validate the salt and iv, it only promises to ensure
+/// the header returns false  if the first 16 bytes are not utf8
+/// and if the first 7 bytes wasn't tampered with.
+pub fn file_contains_header<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<bool> {
+    let mut file = make_file(fname.as_ref(), true)?;
+
+    let header = String::from_utf8(file.read_inplace(VALIDATION_LENGTH)?);
+    Ok(header
+        .map(|string| string.starts_with("$scrypt"))
+        .unwrap_or(false))
+}
+/// Returns header-data from J-Encrypted file.
+/// ## Header Requirements
+///
+/// * 16-bit IV
+/// * 16-bit Salt
+/// * 88 character hashed password
+pub fn parse_header<P: ?Sized + AsRef<Path>>(fname: &P) -> Result<HeaderData, HeaderParserError> {
+    let mut file = make_file(fname, true)?;
+
+    let pass_hash = String::from_utf8(file.read_inplace(PASSWORD_HASH_SIZE)?)?;
+    let iv = file.read_inplace(IV_SIZE)?;
+    let key_salt = file.read_inplace(SALT_SIZE)?;
+
+    Ok((iv, key_salt, pass_hash))
+}
 impl JFile {
-    pub fn new<P: ?Sized + AsRef<Path>>(
+    pub fn new(
         package: &EncryptionPackage,
-        fname: &P,
+        fname: impl AsRef<Path>,
         read: bool,
     ) -> io::Result<Self> {
-        let file = make_file(fname, read)?;
-
         let crypter =
             AesOfb::new_var(&package.key, &package.iv).map_err(|e| io_err!(e.to_string()))?;
 
         Ok(JFile {
             crypter,
-            file,
+            file: make_file(fname.as_ref(), read)?,
             initialized: false,
 
             iv: package.iv.clone(),
@@ -113,40 +145,14 @@ impl JFile {
     }
 
     ///
+    pub fn initialize_encryption(&mut self) -> io::Result<()> {
+        self.initialized = true;
+        self.write_header_data()
+    }
     pub fn initialize_decryption(&mut self) -> io::Result<()> {
-        
+        self.initialized = true;
         self.file.seek(SeekFrom::Start(JFILE_HEADER_SIZE as u64))?;
         Ok(())
-    }
-    /// Determines if the file contains the encryption header.
-    /// # WARNING
-    /// this method doesn't validate the salt and iv, it only promises to ensure
-    /// the header returns false  if the first 16 bytes are not utf8
-    /// and if the first 7 bytes wasn't tampered with.
-    pub fn file_contains_header<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<bool> {
-        let mut file = make_file(fname.as_ref(), true)?;
-
-        let header = String::from_utf8(file.read_inplace(VALIDATION_LENGTH)?);
-        Ok(header
-            .map(|string| string.starts_with("$scrypt"))
-            .unwrap_or(false))
-    }
-    /// Returns header-data from J-Encrypted file.
-    /// ## Header Requirements
-    ///
-    /// * 16-bit IV
-    /// * 16-bit Salt
-    /// * 88 character hashed password
-    pub fn parse_header<P: ?Sized + AsRef<Path>>(
-        fname: &P,
-    ) -> Result<HeaderData, HeaderParserError> {
-        let mut file = make_file(fname, true)?;
-
-        let pass_hash = String::from_utf8(file.read_inplace(PASSWORD_HASH_SIZE)?)?;
-        let iv = file.read_inplace(IV_SIZE)?;
-        let key_salt = file.read_inplace(SALT_SIZE)?;
-
-        Ok((iv, key_salt, pass_hash))
     }
     pub fn raw_write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         self.file.write_all(buf)?;
@@ -156,19 +162,39 @@ impl JFile {
     fn apply_keystream(&mut self, buf: &mut [u8]) {
         self.crypter.apply_keystream(buf);
     }
+
     /// Initialize JFile with header data, (iv and salt), 32 bytes if not already initialized.
     /// Writes data to beginning of file.
     fn write_header_data(&mut self) -> io::Result<()> {
-        let not_initialized = !self.initialized;
-
-        if not_initialized {
-            self.file.write_all(self.password_hash.as_bytes())?;
-            self.file.write_all(&self.iv)?;
-            self.file.write_all(&self.key_salt)?;
-
+        if self.initialized {
+            return Err(io_err!("Already wrote header!"));
+        } else {
             self.initialized = true;
         }
+
+        self.file.write_all(self.password_hash.as_bytes())?;
+        self.file.write_all(&self.iv)?;
+        self.file.write_all(&self.key_salt)?;
+
         Ok(())
+    }
+
+    fn make_temp_file(&self) {
+        unimplemented!()
+    }
+    fn encrypt_as_file(&self) {
+        unimplemented!()
+    }
+
+    fn clean_up_crypt() {
+        unimplemented!()
+    }
+
+    pub fn encrypt(&mut self, to: impl Write) {
+        unimplemented!()
+    }
+    pub fn decrypt(&mut self) {
+        unimplemented!()
     }
 }
 impl Read for JFile {
@@ -181,8 +207,6 @@ impl Read for JFile {
 }
 impl Write for JFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.write_header_data()?;
-
         let mut dat = buf.to_vec();
         self.apply_keystream(&mut dat);
 
@@ -190,7 +214,6 @@ impl Write for JFile {
     }
 
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.write_header_data()?;
         let mut dat = buf.to_owned();
         self.apply_keystream(&mut dat);
 
@@ -199,5 +222,18 @@ impl Write for JFile {
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn jfile_encrypt() {
+        let package = EncryptionPackage::generate("Password123", None, None, None).unwrap();
+
+        let mut jfile = JFile::new(&package, "test.txt", true).unwrap();
+
+        // jfile.encrypt();
     }
 }
