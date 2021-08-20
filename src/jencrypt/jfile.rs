@@ -234,6 +234,6 @@ mod tests {
 
         let mut jfile = JFile::new(&package, "test.txt", true).unwrap();
 
-        // jfile.encrypt();
+        //jfile.encrypt();
     }
 }
