@@ -34,11 +34,17 @@ mod cli {
         let files = user_select_files();
 
         println!("file 0 = {}", &files[0]);
-        let decrypting = jencrypt::jfile::file_contains_header(&files[0])
-            .expect("Couldn't read Document header!");
+        let decrypting = jencrypt::jfile::contains_header(
+            &mut std::fs::File::open(&files[0]).unwrap_or_else(|err| {
+                println!("Error opening '{}'", &files[0]);
+                std::process::exit(-1)
+            }),
+        )
+        .expect("Couldn't read Document header!");
         // if no header and we are decrypting, this means this file is not encrypted.
 
         let crypt_method = if decrypting {
+            println!("decrypting files.");
             jencrypt::decrypt_files
         } else {
             println!("encrypting files.");
@@ -50,7 +56,16 @@ mod cli {
         let result_message = match crypt_method(&password, &files) {
             Ok(cipher_iterator) => {
                 println!("Finished validating, attempting operation..");
-                let error_count = cipher_iterator.filter(|file| file.is_err()).count();
+                let error_count = cipher_iterator
+                    .filter(|file| {
+                        let is_err = file.is_err();
+
+                        if is_err {
+                            println!("Error = {:?}", file);
+                        }
+                        is_err
+                    })
+                    .count();
 
                 let message = if error_count > 0 {
                     format!("{} file(s) could not be ciphered.", error_count)

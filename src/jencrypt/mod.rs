@@ -3,10 +3,11 @@ extern crate readonly;
 pub mod encryption_package;
 pub mod jfile;
 mod password_verification;
+use self::jfile::HeaderParserError;
 use self::password_verification::*;
 use encryption_package::*;
 use jb_utils::extensions::io::EasyRead;
-use jfile::{make_file, JFile};
+use jfile::{make_file, JCrypter};
 use std::fs::{remove_file, rename};
 use std::io;
 use std::io::Write;
@@ -23,7 +24,14 @@ pub enum JEncryptError {
     InvalidFileDataOther(String),
     IOError(io::Error),
 }
-
+impl From<HeaderParserError> for JEncryptError {
+    fn from(err: HeaderParserError) -> Self {
+        match err {
+            HeaderParserError::IOError(err) => JEncryptError::IOError(err),
+            HeaderParserError::InvalidPasswordHash(err) => InvalidFileDataOther(err.to_string()),
+        }
+    }
+}
 impl From<EncryptionPackageError> for JEncryptError {
     fn from(err: EncryptionPackageError) -> Self {
         match err {
@@ -72,41 +80,26 @@ fn cipher_file<P: AsRef<Path>>(
     temp_name.set_extension("tmp");
 
 
-    // Determine which type of file is a temp file
-    // if encrypting, the jfile is written to then renamed back to the original name
-    // if decrypting, the standard file is written to from the jfile then renamed back to the original name
-    let (file_name, jfile_name) = if encrypting {
-        (&fname, &temp_name)
-    } else {
-        (&temp_name, &fname)
-    };
+    let target_file = make_file(&fname, true)?;
 
-    let reading = !encrypting;
+    let mut jfile = JCrypter::new(pack, &target_file)?;
 
     // Read from normal file if encrypting
-    let mut normal_file = make_file(&file_name, encrypting)?;
+    let mut temp_file = make_file(&temp_name, false)?;
 
-    // Read if we are NOT encrypting (decrypting).
-    let mut jfile = JFile::new(pack, &jfile_name, reading)?;
-
-    let pip_io_result = if encrypting {
-        jfile
-            .initialize_encryption()
-            .and(pipe_io(&mut normal_file, &mut jfile))
+    if encrypting {
+        jfile.encrypt_to(&mut temp_file)
     } else {
-        jfile
-            .initialize_decryption()
-            .and(pipe_io(&mut jfile, &mut normal_file))
-    };
-
-    pip_io_result.and(clean_up_temp(&fname, &temp_name))
+        jfile.decrypt_to(&mut temp_file)
+    }
+    .and(clean_up_temp(&fname, &temp_name))
 }
 
-/// Write data from `input` to `output`.
+/// Write all data from `input` to `output`.
 ///
 /// Arguments:
-/// * `input`: the file to be read from (expected as either `JFile` or `File`)
-/// * `output`: the file to be write to (expected as either `JFile` or `File`)
+/// * `input`: the read object
+/// * `output`: the write object
 ///
 fn pipe_io<I: EasyRead, O: Write>(input: &mut I, output: &mut O) -> io::Result<()> {
     let mut buf = vec![0; 8000];
@@ -149,11 +142,16 @@ pub fn decrypt_files<'a, P: AsRef<Path>>(
     pswd: &str,
     fnames: &'a [P],
 ) -> Result<Box<CipherIterator<'a>>, JEncryptError> {
-    let (iv, salt, pass_hash) = jfile::parse_header(fnames[0].as_ref()).map_err(InvalidFileData)?;
+    // Use first file in given array to get the header info, as we assume all files have the same header.
+    // Problem:
+    //  Files that do not have this header, will be corrupted.
+    // Possible Solution:
+    // filter out files with no header, using check header function
+    let mut first_file = make_file(&fnames[0], true)?;
 
-    verify_password(pswd, &pass_hash).map_err(InvalidPassword)?;
+    let pack = EncryptionPackage::from_header(pswd, &mut first_file)?;
 
-    let pack = EncryptionPackage::generate(pswd, Some(salt), Some(iv), Some(pass_hash))?;
+    verify_password(pswd, &pack.password_hash).map_err(InvalidPassword)?;
 
     Ok(generate_cipher_iterator(pack, fnames, false))
 }

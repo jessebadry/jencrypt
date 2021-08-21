@@ -4,10 +4,13 @@ use aes::Aes128;
 use jb_utils::extensions::io::EasyRead;
 use ofb::cipher::{NewStreamCipher, SyncStreamCipher};
 use ofb::Ofb;
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+
+use super::pipe_io;
+
+use std::fmt;
 use std::string::FromUtf8Error;
 
 type HeaderData = (Vec<u8>, Vec<u8>, String);
@@ -19,6 +22,7 @@ pub const IV_SIZE: usize = 16;
 pub const JFILE_HEADER_SIZE: usize = PASSWORD_HASH_SIZE + SALT_SIZE + IV_SIZE;
 /// used to validate the string `"$scrypt"` within a encrypted file header.
 const VALIDATION_LENGTH: usize = 7;
+
 #[derive(Debug)]
 pub enum HeaderParserError {
     InvalidPasswordHash(&'static str),
@@ -53,7 +57,7 @@ impl From<FromUtf8Error> for HeaderParserError {
     }
 }
 
-fn check_if_file_exists<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
+fn is_file<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
     let is_file = std::fs::metadata(&fname)?.is_file();
 
     if !is_file {
@@ -68,6 +72,7 @@ fn check_if_file_exists<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
 
     Ok(())
 }
+
 /// Makes an append-based file.
 ///
 /// # Errors
@@ -75,7 +80,7 @@ fn check_if_file_exists<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
 /// * Any other IO error
 pub fn make_file<P: ?Sized + AsRef<Path>>(fname: &P, reading: bool) -> io::Result<File> {
     if reading {
-        check_if_file_exists(fname)?;
+        is_file(fname)?;
     }
     let writing = !reading;
     let file = OpenOptions::new()
@@ -87,9 +92,9 @@ pub fn make_file<P: ?Sized + AsRef<Path>>(fname: &P, reading: bool) -> io::Resul
     Ok(file)
 }
 
-pub struct JFile {
+pub struct JCrypter<F: Read + Write + Seek> {
     crypter: AesOfb,
-    pub file: File,
+    pub inner: F,
     initialized: bool,
     iv: Vec<u8>,
     key_salt: Vec<u8>,
@@ -101,10 +106,8 @@ pub struct JFile {
 /// this method doesn't validate the salt and iv, it only promises to ensure
 /// the header returns false  if the first 16 bytes are not utf8
 /// and if the first 7 bytes wasn't tampered with.
-pub fn file_contains_header<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<bool> {
-    let mut file = make_file(fname.as_ref(), true)?;
-
-    let header = String::from_utf8(file.read_inplace(VALIDATION_LENGTH)?);
+pub fn contains_header<P: Read>(reader: &mut P) -> io::Result<bool> {
+    let header = String::from_utf8(reader.read_inplace(VALIDATION_LENGTH)?);
     Ok(header
         .map(|string| string.starts_with("$scrypt"))
         .unwrap_or(false))
@@ -115,27 +118,21 @@ pub fn file_contains_header<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<bo
 /// * 16-bit IV
 /// * 16-bit Salt
 /// * 88 character hashed password
-pub fn parse_header<P: ?Sized + AsRef<Path>>(fname: &P) -> Result<HeaderData, HeaderParserError> {
-    let mut file = make_file(fname, true)?;
-
-    let pass_hash = String::from_utf8(file.read_inplace(PASSWORD_HASH_SIZE)?)?;
-    let iv = file.read_inplace(IV_SIZE)?;
-    let key_salt = file.read_inplace(SALT_SIZE)?;
+pub fn parse_header(reader: &mut impl EasyRead) -> Result<HeaderData, HeaderParserError> {
+    let pass_hash = String::from_utf8(reader.read_inplace(PASSWORD_HASH_SIZE)?)?;
+    let iv = reader.read_inplace(IV_SIZE)?;
+    let key_salt = reader.read_inplace(SALT_SIZE)?;
 
     Ok((iv, key_salt, pass_hash))
 }
-impl JFile {
-    pub fn new(
-        package: &EncryptionPackage,
-        fname: impl AsRef<Path>,
-        read: bool,
-    ) -> io::Result<Self> {
+impl<F: Read + Write + Seek> JCrypter<F> {
+    pub fn new(package: &EncryptionPackage, inner: F) -> io::Result<Self> {
         let crypter =
             AesOfb::new_var(&package.key, &package.iv).map_err(|e| io_err!(e.to_string()))?;
 
-        Ok(JFile {
+        Ok(JCrypter {
             crypter,
-            file: make_file(fname.as_ref(), read)?,
+            inner,
             initialized: false,
 
             iv: package.iv.clone(),
@@ -145,17 +142,19 @@ impl JFile {
     }
 
     ///
-    pub fn initialize_encryption(&mut self) -> io::Result<()> {
+    pub fn initialize_encryption(&mut self, to: &mut (impl Read + Write + Seek)) -> io::Result<()> {
         self.initialized = true;
-        self.write_header_data()
+        self.write_header_data(to)
     }
-    pub fn initialize_decryption(&mut self) -> io::Result<()> {
+    pub fn initialize_decryption(
+        &mut self
+    ) -> io::Result<()> {
         self.initialized = true;
-        self.file.seek(SeekFrom::Start(JFILE_HEADER_SIZE as u64))?;
+        self.inner.seek(SeekFrom::Start(JFILE_HEADER_SIZE as u64))?;
         Ok(())
     }
     pub fn raw_write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.file.write_all(buf)?;
+        self.inner.write_all(buf)?;
         Ok(())
     }
 
@@ -165,16 +164,10 @@ impl JFile {
 
     /// Initialize JFile with header data, (iv and salt), 32 bytes if not already initialized.
     /// Writes data to beginning of file.
-    fn write_header_data(&mut self) -> io::Result<()> {
-        if self.initialized {
-            return Err(io_err!("Already wrote header!"));
-        } else {
-            self.initialized = true;
-        }
-
-        self.file.write_all(self.password_hash.as_bytes())?;
-        self.file.write_all(&self.iv)?;
-        self.file.write_all(&self.key_salt)?;
+    fn write_header_data(&mut self, output: &mut (impl Read + Write + Seek)) -> io::Result<()> {
+        output.write_all(self.password_hash.as_bytes())?;
+        output.write_all(&self.iv)?;
+        output.write_all(&self.key_salt)?;
 
         Ok(())
     }
@@ -190,37 +183,41 @@ impl JFile {
         unimplemented!()
     }
 
-    pub fn encrypt(&mut self, to: impl Write) {
-        unimplemented!()
+    pub fn encrypt_to(&mut self, to: &mut (impl Write + Read + Seek)) -> io::Result<()> {
+        self.initialize_encryption(to)?;
+
+        pipe_io(self, to)
     }
-    pub fn decrypt(&mut self) {
-        unimplemented!()
+    pub fn decrypt_to(&mut self, to: &mut (impl Write + Read + Seek)) -> io::Result<()> {
+        self.initialize_decryption()?;
+
+        pipe_io(self, to)
     }
 }
-impl Read for JFile {
+impl<F: Read + Write + Seek> Read for JCrypter<F> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let rb = self.file.read(buf)?;
+        let rb = self.inner.read(buf)?;
         self.apply_keystream(&mut buf[..rb]);
 
         Ok(rb)
     }
 }
-impl Write for JFile {
+impl<F: Read + Write + Seek> Write for JCrypter<F> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut dat = buf.to_vec();
         self.apply_keystream(&mut dat);
 
-        self.file.write(&dat)
+        self.inner.write(&dat)
     }
 
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         let mut dat = buf.to_owned();
         self.apply_keystream(&mut dat);
 
-        self.file.write_all(&dat)
+        self.inner.write_all(&dat)
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()?;
+        self.inner.flush()?;
         Ok(())
     }
 }
@@ -228,12 +225,64 @@ impl Write for JFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jb_utils::structs::MemoryStream;
+    const ENCRYPTED_DATA: &[u8] = &[
+        36, 115, 99, 114, 121, 112, 116, 36, 108, 110, 61, 49, 53, 44, 114, 61, 56, 44, 112, 61,
+        49, 36, 47, 115, 113, 103, 70, 49, 71, 101, 81, 70, 80, 111, 75, 74, 97, 82, 67, 80, 101,
+        106, 52, 119, 36, 113, 121, 113, 104, 51, 84, 110, 74, 77, 57, 47, 47, 114, 70, 78, 104,
+        103, 110, 87, 104, 88, 83, 117, 100, 69, 86, 102, 85, 104, 79, 112, 119, 111, 76, 102, 86,
+        65, 119, 112, 75, 78, 75, 115, 82, 67, 135, 62, 228, 193, 124, 115, 56, 208, 209, 176, 83,
+        95, 233, 0, 152, 100, 84, 196, 94, 55, 194, 90, 117, 243, 131, 55, 81, 27, 246, 248, 74,
+        147, 253, 41, 76, 242, 99, 214, 78,
+    ];
+    const TEST_PASSWORD: &str = "Password123";
+    const UNENCRYPTED_DATA: &[u8] = b"test 1234";
+
     #[test]
     fn jfile_encrypt() {
-        let package = EncryptionPackage::generate("Password123", None, None, None).unwrap();
+        let package = EncryptionPackage::generate(TEST_PASSWORD, None, None, None).unwrap();
 
-        let mut jfile = JFile::new(&package, "test.txt", true).unwrap();
+        let test_stream = MemoryStream::new(UNENCRYPTED_DATA.to_vec().clone());
+        let mut encrypter = JCrypter::new(&package, test_stream).unwrap();
 
-        //jfile.encrypt();
+        let mut output_test_stream = MemoryStream::default();
+
+        encrypter
+            .encrypt_to(&mut output_test_stream)
+            .expect("Encrypt to failed");
+
+        output_test_stream.seek(SeekFrom::Start(0)).unwrap();
+        let encrypted_data = output_test_stream.data();
+
+        // Validate if encrypted
+        let (iv, salt, pass_hash) = parse_header(&mut output_test_stream).unwrap();
+
+        assert_eq!(iv, package.iv);
+        assert_eq!(salt, package.key_salt);
+        assert_eq!(pass_hash, package.password_hash);
+        assert!(&encrypted_data[JFILE_HEADER_SIZE..] != UNENCRYPTED_DATA);
+    }
+    #[test]
+    fn jfile_decrypt() {
+        let mut encrypted_data = MemoryStream::new(ENCRYPTED_DATA.to_vec());
+        let package = EncryptionPackage::from_header(TEST_PASSWORD, &mut encrypted_data)
+            .expect("failed to create encryption package");
+
+        let mut test_output = MemoryStream::default();
+        let mut jcrypter =
+            JCrypter::new(&package, encrypted_data).expect("Failed to create jcrypter");
+
+        jcrypter
+            .decrypt_to(&mut test_output)
+            .expect("decrypt to failed");
+
+        assert_eq!(test_output.data(), UNENCRYPTED_DATA);
+    }
+    #[test]
+    fn test_encryption_package_from_header() {
+        let mut test_file = MemoryStream::new(ENCRYPTED_DATA.to_vec());
+        let package = EncryptionPackage::from_header(TEST_PASSWORD, &mut test_file);
+
+        assert!(package.is_ok());
     }
 }

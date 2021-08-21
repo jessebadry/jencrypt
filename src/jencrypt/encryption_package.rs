@@ -1,5 +1,7 @@
-use crate::io_err;
+use crate::jfile::HeaderParserError;
+use crate::{io_err, jfile};
 
+use jb_utils::extensions::io::EasyRead;
 use jencrypt::password_verification::hash_password;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -23,7 +25,7 @@ impl<T> OptionUtils<T> for Option<T> {
     }
 }
 /// JFile
-use jfile::{IV_SIZE, PASSWORD_HASH_SIZE, SALT_SIZE};
+use jfile::{parse_header, IV_SIZE, PASSWORD_HASH_SIZE, SALT_SIZE};
 
 fn fill_random_secure(data: &mut [u8]) -> io::Result<()> {
     let mut r = OsRng::default();
@@ -85,6 +87,20 @@ impl EncryptionPackage {
         } else {
             Ok(())
         }
+    }
+
+    pub fn from_header<P: EasyRead>(
+        password: &str,
+        reader: &mut P,
+    ) -> Result<Self, HeaderParserError> {
+        let (iv, salt, pass_hash) = jfile::parse_header(reader)?;
+
+        Ok(Self::generate(
+            password,
+            Some(salt),
+            Some(iv),
+            Some(pass_hash),
+        ).expect("Generate failed, bug in parser?"))
     }
     /// Create the main parameters for a JFile encryption / decryption.
     pub fn generate(
