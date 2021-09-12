@@ -3,19 +3,23 @@ extern crate readonly;
 pub mod encryption_package;
 pub mod jfile;
 mod password_verification;
+
 use self::jfile::HeaderParserError;
 use self::password_verification::*;
 use encryption_package::*;
-use jb_utils::extensions::io::EasyRead;
 use jfile::{make_file, JCrypter};
 use std::fs::{remove_file, rename};
 use std::io;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 //Iterator type for encrypting / decrypting a file
-type CipherIterator<'a> = dyn Iterator<Item = io::Result<()>> + 'a;
+type CipherIterator<'a> = dyn Iterator<Item=io::Result<()>> + 'a;
+
+use fmt::Display;
 use self::JEncryptError::*;
+use std::fmt::Display;
+use std::fmt;
+
 #[derive(Debug)]
 pub enum JEncryptError {
     InvalidPassword(VerifyError),
@@ -24,6 +28,15 @@ pub enum JEncryptError {
     InvalidFileDataOther(String),
     IOError(io::Error),
 }
+
+impl Display for JEncryptError {
+    fn fmt(&self, formatter: fmt::Formatter<'_>) -> fmt::Result {
+        write!("")
+    }
+}
+
+impl std::error::Error for JEncryptError {}
+
 impl From<HeaderParserError> for JEncryptError {
     fn from(err: HeaderParserError) -> Self {
         match err {
@@ -32,6 +45,7 @@ impl From<HeaderParserError> for JEncryptError {
         }
     }
 }
+
 impl From<EncryptionPackageError> for JEncryptError {
     fn from(err: EncryptionPackageError) -> Self {
         match err {
@@ -46,6 +60,7 @@ impl From<EncryptionPackageError> for JEncryptError {
         }
     }
 }
+
 impl From<io::Error> for JEncryptError {
     fn from(err: io::Error) -> Self {
         Self::IOError(err)
@@ -92,22 +107,7 @@ fn cipher_file<P: AsRef<Path>>(
     } else {
         jfile.decrypt_to(&mut temp_file)
     }
-    .and(clean_up_temp(&fname, &temp_name))
-}
-
-/// Write all data from `input` to `output`.
-///
-/// Arguments:
-/// * `input`: the read object
-/// * `output`: the write object
-///
-fn pipe_io<I: EasyRead, O: Write>(input: &mut I, output: &mut O) -> io::Result<()> {
-    let mut buf = vec![0; 8000];
-    let mut r = 0;
-    while input.e_read(&mut buf, &mut r)? > 0 {
-        output.write_all(&buf[..r])?;
-    }
-    Ok(())
+        .and(clean_up_temp(&fname, &temp_name))
 }
 
 /// Return an iterator that ciphers each file with the parameters given.
@@ -129,6 +129,7 @@ fn generate_cipher_iterator<'a, P: AsRef<Path>>(
             .map(move |fname| cipher_file(&pack, fname.as_ref(), encrypting)),
     )
 }
+
 pub fn encrypt_files<'a, P: AsRef<Path>>(
     pswd: &str,
     fnames: &'a [P],

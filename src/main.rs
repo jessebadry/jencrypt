@@ -1,10 +1,28 @@
+extern crate jencrypt;
+
 #[cfg(feature = "cli")]
 mod cli {
     use super::*;
+
     extern crate jb_utils;
     extern crate nfd;
+
     use self::jb_utils::jb_inputs::input;
     use self::nfd::Response;
+    use jencrypt::JEncryptError;
+
+    type Result<T> = Result<T, E=JEncryptError>;
+
+    trait CLILogger {
+        fn log(msg: String) {}
+    }
+    
+    impl<T> CLILogger for Result<T>{
+        fn log(msg: String) {
+            todo!()
+        }
+    }
+
     fn handle_error(error: jencrypt::JEncryptError) -> String {
         match error {
             jencrypt::JEncryptError::IOError(err) => format!("{}", err),
@@ -18,8 +36,11 @@ mod cli {
             _ => unimplemented!(),
         }
     }
+
     fn user_select_files() -> Vec<String> {
-        let result = nfd::open_file_multiple_dialog(None, None).expect("Error with file dialog");
+        let result = nfd::open_file_multiple_dialog(None, None)
+            .expect("Error with file dialog");
+
         let files = match result {
             Response::Okay(file_path) => [file_path].to_vec(),
             Response::OkayMultiple(files) => files,
@@ -28,19 +49,19 @@ mod cli {
 
         files
     }
+
     pub fn run() {
         let password = input("Enter password ");
 
         let files = user_select_files();
 
-        println!("file 0 = {}", &files[0]);
         let decrypting = jencrypt::jfile::contains_header(
             &mut std::fs::File::open(&files[0]).unwrap_or_else(|err| {
                 println!("Error opening '{}'", &files[0]);
                 std::process::exit(-1)
             }),
         )
-        .expect("Couldn't read Document header!");
+            .expect("Couldn't read Document header!");
         // if no header and we are decrypting, this means this file is not encrypted.
 
         let crypt_method = if decrypting {
@@ -83,5 +104,5 @@ mod cli {
 
 fn main() {
     #[cfg(feature = "cli")]
-    cli::run();
+        cli::run();
 }

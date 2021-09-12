@@ -25,7 +25,7 @@ impl<T> OptionUtils<T> for Option<T> {
     }
 }
 /// JFile
-use jfile::{parse_header, IV_SIZE, PASSWORD_HASH_SIZE, SALT_SIZE};
+use jfile::{IV_SIZE, PASSWORD_HASH_SIZE, SALT_SIZE};
 
 fn fill_random_secure(data: &mut [u8]) -> io::Result<()> {
     let mut r = OsRng::default();

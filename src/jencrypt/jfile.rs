@@ -8,8 +8,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use super::pipe_io;
-
 use std::fmt;
 use std::string::FromUtf8Error;
 
@@ -72,7 +70,20 @@ fn is_file<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
 
     Ok(())
 }
-
+/// Write all data from `input` to `output`.
+///
+/// Arguments:
+/// * `input`: the read object
+/// * `output`: the write object
+///
+fn pipe_io<I: EasyRead, O: Write>(input: &mut I, output: &mut O) -> io::Result<()> {
+    let mut buf = vec![0; 8000];
+    let mut r = 0;
+    while input.e_read(&mut buf, &mut r)? > 0 {
+        output.write_all(&buf[..r])?;
+    }
+    Ok(())
+}
 /// Makes an append-based file.
 ///
 /// # Errors
@@ -101,7 +112,7 @@ pub struct JCrypter<F: Read + Write + Seek> {
     password_hash: String,
 }
 
-/// Determines if the file contains the encryption header.
+/// Determines if the reader contains the encryption header.
 /// # WARNING
 /// this method doesn't validate the salt and iv, it only promises to ensure
 /// the header returns false  if the first 16 bytes are not utf8
@@ -146,9 +157,7 @@ impl<F: Read + Write + Seek> JCrypter<F> {
         self.initialized = true;
         self.write_header_data(to)
     }
-    pub fn initialize_decryption(
-        &mut self
-    ) -> io::Result<()> {
+    pub fn initialize_decryption(&mut self) -> io::Result<()> {
         self.initialized = true;
         self.inner.seek(SeekFrom::Start(JFILE_HEADER_SIZE as u64))?;
         Ok(())
@@ -170,17 +179,6 @@ impl<F: Read + Write + Seek> JCrypter<F> {
         output.write_all(&self.key_salt)?;
 
         Ok(())
-    }
-
-    fn make_temp_file(&self) {
-        unimplemented!()
-    }
-    fn encrypt_as_file(&self) {
-        unimplemented!()
-    }
-
-    fn clean_up_crypt() {
-        unimplemented!()
     }
 
     pub fn encrypt_to(&mut self, to: &mut (impl Write + Read + Seek)) -> io::Result<()> {
@@ -269,13 +267,15 @@ mod tests {
             .expect("failed to create encryption package");
 
         let mut test_output = MemoryStream::default();
+        encrypted_data.seek(SeekFrom::Start(0));
+        println!("{:?}", encrypted_data);
         let mut jcrypter =
             JCrypter::new(&package, encrypted_data).expect("Failed to create jcrypter");
 
         jcrypter
             .decrypt_to(&mut test_output)
             .expect("decrypt to failed");
-
+        
         assert_eq!(test_output.data(), UNENCRYPTED_DATA);
     }
     #[test]
