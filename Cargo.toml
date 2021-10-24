@@ -7,7 +7,7 @@ authors = ["Jesse Badry <jessebadry@gmail.com>"]
 libc = "0.2.71"
 scrypt = "0.6.4"
 base64 = "0.13.0"
-nfd = { git = "https://github.com/saurvs/nfd-rs.git", optional = true}
+nfd = { git = "https://github.com/saurvs/nfd-rs.git", optional = false}
 ofb = "0.4.0"
 aes = "0.6.0"
 cipher = "0.2.5"
@@ -17,4 +17,4 @@ jb_utils = {git="https://github.com/jessebadry/Jesse-s-Utils.git"}
 
 
 [features]
-cli = ["nfd"]
+cli = []

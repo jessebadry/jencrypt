@@ -26,11 +26,13 @@ pub enum HeaderParserError {
     InvalidPasswordHash(&'static str),
     IOError(std::io::Error),
 }
+
 impl fmt::Display for HeaderParserError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "1")
     }
 }
+
 impl std::error::Error for HeaderParserError {}
 
 impl From<HeaderParserError> for std::io::Error {
@@ -41,11 +43,13 @@ impl From<HeaderParserError> for std::io::Error {
         }
     }
 }
+
 impl From<std::io::Error> for HeaderParserError {
     fn from(error: std::io::Error) -> Self {
         Self::IOError(error)
     }
 }
+
 impl From<FromUtf8Error> for HeaderParserError {
     fn from(_err: FromUtf8Error) -> Self {
         /*Log Error here */
@@ -70,6 +74,7 @@ fn is_file<P: ?Sized + AsRef<Path>>(fname: &P) -> io::Result<()> {
 
     Ok(())
 }
+
 /// Write all data from `input` to `output`.
 ///
 /// Arguments:
@@ -84,6 +89,7 @@ fn pipe_io<I: EasyRead, O: Write>(input: &mut I, output: &mut O) -> io::Result<(
     }
     Ok(())
 }
+
 /// Makes an append-based file.
 ///
 /// # Errors
@@ -123,6 +129,7 @@ pub fn contains_header<P: Read>(reader: &mut P) -> io::Result<bool> {
         .map(|string| string.starts_with("$scrypt"))
         .unwrap_or(false))
 }
+
 /// Returns header-data from J-Encrypted file.
 /// ## Header Requirements
 ///
@@ -136,10 +143,11 @@ pub fn parse_header(reader: &mut impl EasyRead) -> Result<HeaderData, HeaderPars
 
     Ok((iv, key_salt, pass_hash))
 }
+
 impl<F: Read + Write + Seek> JCrypter<F> {
     pub fn new(package: &EncryptionPackage, inner: F) -> io::Result<Self> {
-        let crypter =
-            AesOfb::new_var(&package.key, &package.iv).map_err(|e| io_err!(e.to_string()))?;
+        let crypter = AesOfb::new_var(&package.key, &package.iv)
+            .map_err(|e| io_err!(e.to_string()))?;
 
         Ok(JCrypter {
             crypter,
@@ -182,16 +190,19 @@ impl<F: Read + Write + Seek> JCrypter<F> {
     }
 
     pub fn encrypt_to(&mut self, to: &mut (impl Write + Read + Seek)) -> io::Result<()> {
+        // Writes header data, needed for future decryption.
         self.initialize_encryption(to)?;
 
         pipe_io(self, to)
     }
     pub fn decrypt_to(&mut self, to: &mut (impl Write + Read + Seek)) -> io::Result<()> {
+        // Reads expected Header data.
         self.initialize_decryption()?;
 
         pipe_io(self, to)
     }
 }
+
 impl<F: Read + Write + Seek> Read for JCrypter<F> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let rb = self.inner.read(buf)?;
@@ -200,6 +211,7 @@ impl<F: Read + Write + Seek> Read for JCrypter<F> {
         Ok(rb)
     }
 }
+
 impl<F: Read + Write + Seek> Write for JCrypter<F> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut dat = buf.to_vec();
@@ -208,15 +220,15 @@ impl<F: Read + Write + Seek> Write for JCrypter<F> {
         self.inner.write(&dat)
     }
 
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()?;
+        Ok(())
+    }
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         let mut dat = buf.to_owned();
         self.apply_keystream(&mut dat);
 
         self.inner.write_all(&dat)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()?;
-        Ok(())
     }
 }
 
@@ -224,6 +236,7 @@ impl<F: Read + Write + Seek> Write for JCrypter<F> {
 mod tests {
     use super::*;
     use jb_utils::structs::MemoryStream;
+
     const ENCRYPTED_DATA: &[u8] = &[
         36, 115, 99, 114, 121, 112, 116, 36, 108, 110, 61, 49, 53, 44, 114, 61, 56, 44, 112, 61,
         49, 36, 47, 115, 113, 103, 70, 49, 71, 101, 81, 70, 80, 111, 75, 74, 97, 82, 67, 80, 101,
@@ -238,10 +251,12 @@ mod tests {
 
     #[test]
     fn jfile_encrypt() {
-        let package = EncryptionPackage::generate(TEST_PASSWORD, None, None, None).unwrap();
+        let package = EncryptionPackage::generate(TEST_PASSWORD,
+                                                  None, None, None).unwrap();
 
         let test_stream = MemoryStream::new(UNENCRYPTED_DATA.to_vec().clone());
-        let mut encrypter = JCrypter::new(&package, test_stream).unwrap();
+        let mut encrypter = JCrypter::new(&package, test_stream)
+            .unwrap();
 
         let mut output_test_stream = MemoryStream::default();
 
@@ -258,8 +273,10 @@ mod tests {
         assert_eq!(iv, package.iv);
         assert_eq!(salt, package.key_salt);
         assert_eq!(pass_hash, package.password_hash);
-        assert!(&encrypted_data[JFILE_HEADER_SIZE..] != UNENCRYPTED_DATA);
+
+        assert_ne!(&encrypted_data[JFILE_HEADER_SIZE..], UNENCRYPTED_DATA);
     }
+
     #[test]
     fn jfile_decrypt() {
         let mut encrypted_data = MemoryStream::new(ENCRYPTED_DATA.to_vec());
@@ -268,16 +285,17 @@ mod tests {
 
         let mut test_output = MemoryStream::default();
         encrypted_data.seek(SeekFrom::Start(0));
-        println!("{:?}", encrypted_data);
+
         let mut jcrypter =
             JCrypter::new(&package, encrypted_data).expect("Failed to create jcrypter");
 
         jcrypter
             .decrypt_to(&mut test_output)
             .expect("decrypt to failed");
-        
+
         assert_eq!(test_output.data(), UNENCRYPTED_DATA);
     }
+
     #[test]
     fn test_encryption_package_from_header() {
         let mut test_file = MemoryStream::new(ENCRYPTED_DATA.to_vec());

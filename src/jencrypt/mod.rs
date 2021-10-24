@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 //Iterator type for encrypting / decrypting a file
 type CipherIterator<'a> = dyn Iterator<Item=io::Result<()>> + 'a;
 
-use fmt::Display;
 use self::JEncryptError::*;
 use std::fmt::Display;
 use std::fmt;
@@ -30,8 +29,8 @@ pub enum JEncryptError {
 }
 
 impl Display for JEncryptError {
-    fn fmt(&self, formatter: fmt::Formatter<'_>) -> fmt::Result {
-        write!("")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", "")
     }
 }
 
